@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+/* ─── Leaflet core ─── */
+@import "leaflet/dist/leaflet.css";
+/* ─── MarkerCluster ─── */
+@import "leaflet.markercluster/dist/MarkerCluster.css";
+@import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+/* ─── Leaflet Draw ─── */
+@import "leaflet-draw/dist/leaflet.draw.css";
+
+/* لو في أي ستايل تاني سيبه تحتهم عادي */
+body {
+  @apply bg-gray-900 text-white antialiased;
+}
+
+/* ─── SOS Critical ping animation ─── */
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity:   0;
+  }
+}
+
+/* ─── Cluster marker override — dark glass style ─── */
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background-color: rgba(99, 102, 241, 0.25) !important;
+}
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background-color: rgba(99, 102, 241, 0.6) !important;
+  color:            #fff !important;
+  font-weight:      700;
+  font-size:        13px;
+}
+
+/* ─── Leaflet popup dark theme ─── */
+.leaflet-popup-content-wrapper {
+  background: #1f2937;
+  border:     1px solid #374151;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  border-radius: 12px !important;
+  color: #f9fafb;
+}
+.leaflet-popup-tip {
+  background: #1f2937;
+}
+.leaflet-popup-content {
+  margin: 12px 16px !important;
+}
+
+/* ─── Leaflet Draw toolbar dark style ─── */
+.leaflet-draw-toolbar a {
+  background-color: #1f2937 !important;
+  border-color:     #374151 !important;
+  color:            #d1d5db !important;
+}
+.leaflet-draw-toolbar a:hover {
+  background-color: #374151 !important;
+}
+
+/* ─── Toast slide-in / slide-out ─── */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(110%) scale(0.92); }
+  to   { opacity: 1; transform: translateX(0)   scale(1);    }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0)   scale(1);    max-height: 120px; }
+  to   { opacity: 0; transform: translateX(110%) scale(0.92); max-height: 0;    }
+}
+@keyframes progress-shrink {
+  from { width: 100%; }
+  to   { width: 0%;   }
+}
+@keyframes sos-pulse-border {
+  0%, 100% { box-shadow: 0 0 0 0    rgba(239,68,68,0.5); }
+  50%       { box-shadow: 0 0 0 8px rgba(239,68,68,0);   }
+}
+
+.toast-enter  { animation: toast-in  0.35s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+.toast-exit   { animation: toast-out 0.25s ease-in forwards; }
+.toast-sos    { animation: sos-pulse-border 1.5s ease-in-out infinite; }
+.toast-progress { animation: progress-shrink linear forwards; }
