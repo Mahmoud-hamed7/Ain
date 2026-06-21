@@ -36,10 +36,14 @@ export default function SOS() {
   const [message,    setMessage]    = useState('');
   const [loading,    setLoading]    = useState(false);
   const [activeSOS,  setActiveSOS]  = useState<ActiveSOS | null>(null);
-  const [pingCount,  setPingCount]  = useState(0);
-  const [isStale,    setIsStale]    = useState(false);
+  const [pingCount,   setPingCount]   = useState(0);
+  const [queuedCount, setQueuedCount] = useState(0);
+  const [isStale,     setIsStale]     = useState(false);
+  const [isOnline,    setIsOnline]    = useState(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true,
+  );
 
-  // Offline location queue
+  // Offline location queue (used when REST POST fails or browser is offline)
   const locationQueue = useRef<SOSBatchLocationItem[]>([]);
   const watchIdRef    = useRef<number | null>(null);
 
@@ -77,7 +81,12 @@ export default function SOS() {
     if (liveState) setIsStale(liveState.isInitiatorLocationStale);
   }, [liveState]);
 
-  // ── Location pinging ─────────────────────────────────────────────
+  // ── Location pinging — always POST via REST; queue only on HTTP failure ──
+  const enqueueLocation = useCallback((payload: SOSBatchLocationItem) => {
+    locationQueue.current = [...locationQueue.current, payload].slice(-50);
+    setQueuedCount(locationQueue.current.length);
+  }, []);
+
   const sendLocation = useCallback(async (sosId: string, pos: GeolocationPosition) => {
     const payload: SOSBatchLocationItem = {
       latitude:       pos.coords.latitude,
@@ -87,9 +96,8 @@ export default function SOS() {
       recordedAtUtc:  new Date().toISOString(),
     };
 
-    if (!isConnected) {
-      // Queue for batch upload later (max 50)
-      locationQueue.current = [...locationQueue.current, payload].slice(-50);
+    if (!navigator.onLine) {
+      enqueueLocation(payload);
       return;
     }
 
@@ -98,23 +106,41 @@ export default function SOS() {
       setPingCount((n) => n + 1);
       setIsStale(false);
     } catch {
-      locationQueue.current = [...locationQueue.current, payload].slice(-50);
+      enqueueLocation(payload);
     }
-  }, [isConnected]);
+  }, [enqueueLocation]);
 
-  // Upload offline queue when connection restored
   const flushQueue = useCallback(async (sosId: string) => {
-    if (!locationQueue.current.length) return;
+    if (!locationQueue.current.length || !navigator.onLine) return;
     const batch = [...locationQueue.current];
     locationQueue.current = [];
+    setQueuedCount(0);
     try {
       await apiClient.post(`/api/sosalerts/${sosId}/locations/batch`, { locations: batch });
       setPingCount((n) => n + batch.length);
     } catch {
-      // Re-enqueue on failure
       locationQueue.current = [...batch, ...locationQueue.current].slice(-50);
+      setQueuedCount(locationQueue.current.length);
     }
   }, []);
+
+  useEffect(() => {
+    const onOnline = () => {
+      setIsOnline(true);
+      if (activeSOS) flushQueue(activeSOS.id);
+    };
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [activeSOS, flushQueue]);
+
+  useEffect(() => {
+    if (activeSOS) flushQueue(activeSOS.id);
+  }, [activeSOS, flushQueue]);
 
   useEffect(() => {
     if (isConnected && activeSOS) flushQueue(activeSOS.id);
@@ -136,6 +162,7 @@ export default function SOS() {
       watchIdRef.current = null;
     }
     locationQueue.current = [];
+    setQueuedCount(0);
   }, []);
 
   // ── Trigger SOS ──────────────────────────────────────────────────
@@ -217,23 +244,27 @@ export default function SOS() {
               {isStale ? 'Location signal lost' : `Broadcasting location • ${pingCount} pings sent`}
             </div>
 
-            {/* Connection status */}
+            {/* Network + hub status */}
             <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs ${
-              isConnected
+              isOnline
                 ? 'bg-emerald-500/10 text-emerald-400'
                 : 'bg-red-500/10 text-red-400'
             }`}>
-              {isConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-              {isConnected
-                ? 'Connected to real-time hub'
-                : `Offline — ${locationQueue.current.length} locations queued`}
+              {isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+              {!isOnline
+                ? `Offline — ${queuedCount} locations queued`
+                : queuedCount > 0
+                  ? `Retrying ${queuedCount} queued locations…`
+                  : isConnected
+                    ? 'GPS sending • live hub connected'
+                    : 'GPS sending • hub reconnecting'}
             </div>
 
             {/* Live state info */}
             {liveState && (
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <CheckCircle className="w-3.5 h-3.5 text-indigo-400" />
-                {liveState.activeMemberCount} active community members
+                {liveState.totalActiveMembers} active community members
               </div>
             )}
 

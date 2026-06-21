@@ -125,6 +125,7 @@ const router = createBrowserRouter([
               { path: '/admin/users', element: <AdminUsers /> },
               { path: '/admin/authorities', element: <AdminAuthorities /> },
               { path: '/admin/reports', element: <AdminReports /> },
+              { path: '/admin/reports/:id', element: <AuthorityReportDetail /> },
               { path: '/admin/categories', element: <AdminCategories /> },
               { path: '/admin/specializations', element: <AdminSpecializations /> },
               { path: '/admin/sos', element: <AdminSOS /> },

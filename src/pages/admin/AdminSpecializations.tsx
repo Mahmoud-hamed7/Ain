@@ -2,18 +2,25 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2 } from 'lucide-react';
 import apiClient from '../../api/client';
+import { authoritiesApi } from '../../api/authorities';
 import Skeleton from '../../components/Skeleton';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { useNotificationStore } from '../../store/notificationStore';
+import type { Specialization } from '../../types';
 
-interface Spec { id: string; name: string; description?: string; iconName?: string; categoryId?: string; categoryName?: string }
+type Spec = Specialization & { iconName?: string | null };
 
 function SpecFormModal({
   open, spec, categories, onClose, onSave,
 }: { open: boolean; spec: Spec | null; categories: any[]; onClose: () => void; onSave: (d: any) => void }) {
   const [form, setForm] = useState(
     spec
-      ? { name: spec.name, description: spec.description ?? '', iconName: spec.iconName ?? '', categoryId: spec.categoryId ?? '' }
+      ? {
+          name: spec.name,
+          description: spec.description ?? '',
+          iconName: spec.iconName ?? spec.icon ?? '',
+          categoryId: spec.categoryId ?? '',
+        }
       : { name: '', description: '', iconName: '', categoryId: '' }
   );
   if (!open) return null;
@@ -75,9 +82,9 @@ export default function AdminSpecializations() {
   const [formModal,    setFormModal]    = useState<{ open: boolean; spec: Spec | null }>({ open: false, spec: null });
   const [deleteModal,  setDeleteModal]  = useState<{ open: boolean; id: string; name: string } | null>(null);
 
-  const { data: specs, isLoading } = useQuery<Spec[]>({
+  const { data: specs = [], isLoading } = useQuery<Spec[]>({
     queryKey: ['specializations'],
-    queryFn:  () => apiClient.get('/api/specializations').then((r) => r.data),
+    queryFn: () => authoritiesApi.getAllSpecializations(),
   });
 
   const { data: categories } = useQuery({
@@ -97,14 +104,14 @@ export default function AdminSpecializations() {
         addToast({ type: 'error', title: 'Error', description: e?.response?.data?.message ?? 'Failed.' })
       );
 
-  const catList: any[] = categories ?? [];
+  const catList: any[] = Array.isArray(categories) ? categories : [];
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-5">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-white">Specializations</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{specs?.length ?? 0} specializations</p>
+          <p className="text-sm text-gray-400 mt-0.5">{specs.length} specializations</p>
         </div>
         <button
           onClick={() => setFormModal({ open: true, spec: null })}
@@ -128,10 +135,10 @@ export default function AdminSpecializations() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/60">
-                {(specs ?? []).map((s) => (
+                {specs.map((s) => (
                   <tr key={s.id} className="hover:bg-gray-800/30 transition-colors">
                     <td className="px-4 py-3 font-semibold text-white">{s.name}</td>
-                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{s.iconName ?? '—'}</td>
+                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{s.icon ?? s.iconName ?? '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-400 max-w-xs truncate">{s.description ?? '—'}</td>
                     <td className="px-4 py-3">
                       {s.categoryName && (
@@ -160,7 +167,7 @@ export default function AdminSpecializations() {
                 ))}
               </tbody>
             </table>
-            {specs?.length === 0 && <p className="text-center py-12 text-gray-500 text-sm">No specializations yet.</p>}
+            {specs.length === 0 && <p className="text-center py-12 text-gray-500 text-sm">No specializations yet.</p>}
           </div>
         )}
       </div>

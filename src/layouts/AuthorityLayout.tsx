@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard, ClipboardList, Map, AlertTriangle,
   BarChart3, UserCircle, Users,
@@ -8,6 +9,9 @@ import {
 import NotificationCenter from '../components/NotificationCenter';
 import { useAuthStore } from '../store/authStore';
 import ConnectionStatus from '../components/ConnectionStatus';
+import { useSignalR } from '../providers/SignalRProvider';
+import apiClient from '../api/client';
+import { parseCommunityListFromResponse } from '../hooks/useCommunityNameMap';
 
 const navItems = [
   { to: '/authority/dashboard', label: 'Dashboard',     icon: LayoutDashboard },
@@ -20,9 +24,51 @@ const navItems = [
 ];
 
 export default function AuthorityLayout() {
-  const user       = useAuthStore((s) => s.user);
+  const user = useAuthStore((s) => s.user);
+  const { joinCommunityGroup, leaveCommunityGroup, connectionState } = useSignalR();
+  const joinedGroupIds = useRef<Set<string>>(new Set());
 
   const [time, setTime] = useState(new Date());
+
+  const { data: jurisdictionCommunities } = useQuery({
+    queryKey: ['community', 'all', 'authority-signalr'],
+    queryFn: () =>
+      apiClient
+        .get('/api/Community/all', { params: { pageNumber: 1, pageSize: 1000 } })
+        .then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+
+  /* Join SignalR community groups so ReceiveLocationUpdate / SOS events arrive */
+  useEffect(() => {
+    if (connectionState !== 'Connected') return;
+
+    const communities = parseCommunityListFromResponse(jurisdictionCommunities);
+    const nextIds = new Set(communities.map((c) => c.id));
+
+    for (const id of joinedGroupIds.current) {
+      if (!nextIds.has(id)) {
+        leaveCommunityGroup(id);
+        joinedGroupIds.current.delete(id);
+      }
+    }
+
+    for (const id of nextIds) {
+      if (!joinedGroupIds.current.has(id)) {
+        joinCommunityGroup(id);
+        joinedGroupIds.current.add(id);
+      }
+    }
+  }, [jurisdictionCommunities, connectionState, joinCommunityGroup, leaveCommunityGroup]);
+
+  useEffect(() => {
+    return () => {
+      for (const id of joinedGroupIds.current) {
+        leaveCommunityGroup(id);
+      }
+      joinedGroupIds.current.clear();
+    };
+  }, [leaveCommunityGroup]);
 
   useEffect(() => {
     const id = setInterval(() => setTime(new Date()), 1000);

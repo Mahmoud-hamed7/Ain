@@ -170,23 +170,21 @@ export default function SignalRProvider({ children }: { children: ReactNode }) {
       if (severity === 'Critical') playAlertSound(severity);
     });
 
-    conn.on('ReceiveLocationUpdate', (alertId: string, location: SOSLocationDto) => {
-      queryClient.setQueryData(['sos', alertId, 'locations'], (old: SOSLocationDto[] | undefined) =>
+    // ReceiveLocationUpdate — canonical 2-arg form per backend ISOSClient interface:
+    //   Task ReceiveLocationUpdate(Guid sosAlertId, SOSLocationDto locationUpdate)
+    conn.on('ReceiveLocationUpdate', (sosAlertId: string, location: SOSLocationDto) => {
+      // Append to full location history cache (read by SOSLiveMap)
+      queryClient.setQueryData(['sos', sosAlertId, 'locations'], (old: SOSLocationDto[] | undefined) =>
         old ? [...old, location] : [location]
       );
+      // Invalidate live-state so any polling consumers stay fresh too
+      queryClient.invalidateQueries({ queryKey: ['sos', sosAlertId, 'live-state'] });
     });
 
     conn.on('ReceiveReportStatusChanged', (reportId: string, newStatus: string) => {
       queryClient.invalidateQueries({ queryKey: ['reports'] });
       addToast({ type: 'info', title: 'Report Updated', description: `A report status changed to ${newStatus}.` });
       addNotif({ type: 'report', title: 'Report Status Changed', description: `Report status updated to "${newStatus}".`, link: `/authority/report/${reportId}` });
-    });
-
-    conn.on('ReceiveLocationUpdate', (_communityId: string, sosId: string, location: SOSLocationDto) => {
-      queryClient.setQueryData(['sos', sosId, 'locations'], (old: SOSLocationDto[] | undefined) =>
-        old ? [...old, location] : [location]
-      );
-      queryClient.invalidateQueries({ queryKey: ['sos', sosId, 'live-state'] });
     });
 
     conn.on('ReceiveLocationStale', (sosAlertId: string, secondsSinceLastPing: number) => {

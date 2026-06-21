@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -21,6 +21,14 @@ import Skeleton from "../../components/Skeleton";
 import Button from "../../components/Button";
 import { useNotificationStore } from "../../store/notificationStore";
 import { getStatusPinColor, createCustomIcon } from "../../utils/map";
+import { normalizeReportDetail } from "../../utils/reports";
+import {
+  extractApiErrorMessage,
+  normalizeReportStatusFromApi,
+  reportStatusLabel,
+  toApiReportStatus,
+  toApiReportStatusInt,
+} from "../../utils/reportStatus";
 import type { Report, Attachment } from "../../types";
 
 /* ─── Helper: Format Image URL ─────────────────────────────── */
@@ -60,12 +68,14 @@ function ReporterCard({
   reporter,
   visibility,
   onImageClick,
+  adminView = false,
 }: {
   reporter: Report["reporter"];
   visibility: string;
   onImageClick: (src: string) => void;
+  adminView?: boolean;
 }) {
-  if (visibility === "Anonymous" || !reporter) {
+  if (!adminView && (visibility === "Anonymous" || !reporter)) {
     return (
       <div className="bg-gray-800/60 border border-amber-700/40 rounded-xl p-5 flex flex-col items-center gap-3 text-center">
         <Lock className="w-8 h-8 text-amber-500" />
@@ -76,6 +86,12 @@ function ReporterCard({
           Contact a System Administrator if identity verification is required.
         </p>
       </div>
+    );
+  }
+
+  if (!reporter) {
+    return (
+      <p className="text-sm text-gray-400 text-center py-4">No reporter information</p>
     );
   }
 
@@ -172,6 +188,10 @@ function ReporterCard({
 /* ─── Main page ─────────────────────────────────────────────── */
 export default function AuthorityReportDetail() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  const isAdminView = location.pathname.startsWith("/admin/reports/");
+  const backPath = isAdminView ? "/admin/reports" : "/authority/feed";
+  const backLabel = isAdminView ? "Back to Report Management" : "Back to Feed";
   const queryClient = useQueryClient();
   const addToast = useNotificationStore((s) => s.addToast);
 
@@ -186,7 +206,8 @@ export default function AuthorityReportDetail() {
   /* Fetch report */
   const { data: report, isLoading } = useQuery<Report>({
     queryKey: ["reports", id],
-    queryFn: async () => (await apiClient.get(`/api/reports/${id}`)).data,
+    queryFn: async () =>
+      normalizeReportDetail((await apiClient.get(`/api/reports/${id}`)).data),
   });
 
   /* Fetch timeline */
@@ -211,22 +232,32 @@ export default function AuthorityReportDetail() {
   /* Status mutation */
   const updateStatus = useMutation({
     mutationFn: async (newStatus: string) => {
+      const apiStatus = toApiReportStatus(newStatus);
+      const statusInt = toApiReportStatusInt(newStatus);
       await apiClient.put(
         `/api/reports/${id}/status`,
-        { status: newStatus },
+        { status: statusInt },
         { headers: { "Content-Type": "application/json" } },
       );
+      return apiStatus;
     },
-    onSuccess: (_, newStatus) => {
+    onSuccess: (apiStatus) => {
       queryClient.invalidateQueries({ queryKey: ["reports", id] });
       queryClient.invalidateQueries({ queryKey: ["reports", id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["reports", "authority-feed"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "reports"] });
       addToast({
         type: "success",
         title: "Status Updated",
-        description: `Report marked as ${newStatus}`,
+        description: `Report marked as ${reportStatusLabel(apiStatus)}`,
       });
     },
-    onError: () => addToast({ type: "error", title: "Update Failed" }),
+    onError: (error) =>
+      addToast({
+        type: "error",
+        title: "Update Failed",
+        description: extractApiErrorMessage(error),
+      }),
   });
 
   /* Notes mutation */
@@ -271,7 +302,7 @@ export default function AuthorityReportDetail() {
     )
       return;
     if (e.key.toLowerCase() === "d") setConfirmStatus("Dispatched");
-    if (e.key.toLowerCase() === "r") setConfirmStatus("Resolved"); // تم التعديل إلى s صغيرة
+    if (e.key.toLowerCase() === "r") setConfirmStatus("ReSolved");
     if (e.key.toLowerCase() === "x") setConfirmStatus("Rejected");
   }, []);
   useEffect(() => {
@@ -280,10 +311,23 @@ export default function AuthorityReportDetail() {
   }, [handleKey]);
 
   const handleStatusConfirm = () => {
-    if (confirmStatus) {
-      updateStatus.mutate(confirmStatus);
+    if (!confirmStatus || !report) {
       setConfirmStatus(null);
+      return;
     }
+    const next = toApiReportStatus(confirmStatus);
+    const current = normalizeReportStatusFromApi(report.status);
+    if (next === current) {
+      addToast({
+        type: "info",
+        title: "No Change",
+        description: `Report is already ${reportStatusLabel(current)}.`,
+      });
+      setConfirmStatus(null);
+      return;
+    }
+    updateStatus.mutate(next);
+    setConfirmStatus(null);
   };
 
   if (isLoading)
@@ -311,7 +355,7 @@ export default function AuthorityReportDetail() {
               Set status to:{" "}
               <span className="font-bold text-white">{confirmStatus}</span>
             </p>
-            {confirmStatus === "Resolved" && ( // تم التعديل إلى s صغيرة
+            {confirmStatus === "ReSolved" && (
               <div className="my-3 bg-emerald-900/30 border border-emerald-700/40 text-emerald-300 text-xs p-3 rounded-lg">
                 ✅ This will award <strong>+10 trust points</strong> to the
                 reporter.
@@ -346,10 +390,10 @@ export default function AuthorityReportDetail() {
       {/* Back + breadcrumb */}
       <div className="flex items-center gap-3">
         <Link
-          to="/authority/feed"
+          to={backPath}
           className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" /> Back to Feed
+          <ArrowLeft className="w-4 h-4" /> {backLabel}
         </Link>
         <span className="text-gray-700">/</span>
         <span className="text-sm text-gray-500 truncate max-w-xs">
@@ -377,15 +421,14 @@ export default function AuthorityReportDetail() {
               <div className="flex flex-col items-end gap-2 shrink-0">
                 <div className="flex items-center gap-2">
                   <select
-                    value={report.status}
+                    value={normalizeReportStatusFromApi(report.status)}
                     onChange={(e) => setConfirmStatus(e.target.value)}
                     disabled={updateStatus.isPending}
                     className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-blue-500"
                   >
                     <option value="UnderReview">Under Review</option>
                     <option value="Dispatched">Dispatched</option>
-                    <option value="Resolved">Resolved</option>{" "}
-                    {/* تم التعديل هنا لتمرير الـ Value الصحيحة للباك إند */}
+                    <option value="ReSolved">Resolved</option>
                     <option value="Rejected">Rejected</option>
                   </select>
                   <div
@@ -645,6 +688,7 @@ export default function AuthorityReportDetail() {
               reporter={report.reporter}
               visibility={report.visibility}
               onImageClick={setLightboxSrc}
+              adminView={isAdminView}
             />
           </div>
 

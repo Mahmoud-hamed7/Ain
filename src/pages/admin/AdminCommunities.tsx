@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { Search, ChevronLeft, ChevronRight, Users, MapPin, Key } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Users, MapPin, Key, RefreshCw } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import apiClient from '../../api/client';
 import Skeleton from '../../components/Skeleton';
 import { TILE_URL, createCustomIcon } from '../../utils/map';
+import { parseCommunityAdminResponse, shortCommunityId } from '../../utils/communities';
+import { communityApi, patchCommunityInviteCodeInCache } from '../../api/community';
+import { useNotificationStore } from '../../store/notificationStore';
 import type { CommunityType } from '../../types';
 
 const COMMUNITY_TYPE_LABELS: Record<CommunityType, string> = {
@@ -27,7 +30,6 @@ function TypeBadge({ type }: { type?: CommunityType }) {
     </span>
   );
 }
-
 
 function CentroidMapPopup({ lat, lng, name }: { lat: number; lng: number; name: string }) {
   const [open, setOpen] = useState(false);
@@ -66,33 +68,63 @@ function CentroidMapPopup({ lat, lng, name }: { lat: number; lng: number; name: 
 }
 
 export default function AdminCommunities() {
-  const [search, setSearch]   = useState('');
-  const [page,   setPage]     = useState(1);
+  const qc = useQueryClient();
+  const addToast = useNotificationStore((s) => s.addToast);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const pageSize = 20;
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'communities', { search, page }],
-    queryFn:  () =>
-      apiClient.get('/api/community/all', {
+    queryFn: async () => {
+      const res = await apiClient.get('/api/Community/all', {
         params: { pageNumber: page, pageSize, search: search || undefined },
-      }).then((r) => r.data),
+      });
+      return parseCommunityAdminResponse(res.data);
+    },
   });
 
-  const communities: any[] = data?.communities ?? data?.items ?? data ?? [];
+  const communities = data?.communities ?? [];
   const totalPages = data?.totalPages ?? 1;
-  const totalCount = data?.totalCount ?? 0;
+  const totalCount = data?.totalCount ?? communities.length;
+
+  const nameCounts = new Map<string, number>();
+  for (const c of communities) {
+    nameCounts.set(c.name, (nameCounts.get(c.name) ?? 0) + 1);
+  }
+
+  const { mutate: regenerateCode } = useMutation({
+    mutationFn: (communityId: string) => communityApi.regenerateInviteCode(communityId),
+    onSuccess: (result, communityId) => {
+      patchCommunityInviteCodeInCache(
+        qc,
+        result.communityId || communityId,
+        result.inviteCode,
+        result.inviteCodeExpiresAt,
+      );
+      addToast({
+        type: 'success',
+        title: 'Invite code generated',
+        description: result.inviteCode ? `Code: ${result.inviteCode}` : undefined,
+      });
+      setRegeneratingId(null);
+    },
+    onError: () => {
+      addToast({ type: 'error', title: 'Failed to generate invite code' });
+      setRegeneratingId(null);
+    },
+  });
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-5">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Community Management</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{totalCount} communities system-wide</p>
+          <p className="text-sm text-gray-400 mt-0.5">{totalCount} communit{totalCount === 1 ? 'y' : 'ies'} system-wide</p>
         </div>
       </div>
 
-      {/* Search */}
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
         <input
@@ -103,13 +135,12 @@ export default function AdminCommunities() {
         />
       </div>
 
-      {/* Table */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
         {isLoading ? (
           <div className="p-6 space-y-3">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} type="table-row" />)}</div>
         ) : (
           <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-800/60 border-b border-gray-800">
                   {['Name', 'Type', 'Description', 'Members', 'Creator', 'Created', 'Centroid', 'Invite Code'].map((h) => (
@@ -118,10 +149,16 @@ export default function AdminCommunities() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/60">
-                {communities.map((c: any) => (
+                {communities.map((c) => (
                   <tr key={c.id} className="hover:bg-gray-800/30 transition-colors">
                     <td className="px-4 py-3">
                       <p className="font-semibold text-white">{c.name}</p>
+                      <p className="text-[10px] font-mono text-gray-500 mt-0.5" title={c.id}>
+                        …{shortCommunityId(c.id)}
+                        {(nameCounts.get(c.name) ?? 0) > 1 && (
+                          <span className="ml-1.5 text-gray-500">duplicate name</span>
+                        )}
+                      </p>
                     </td>
                     <td className="px-4 py-3">
                       <TypeBadge type={c.communityType} />
@@ -132,34 +169,45 @@ export default function AdminCommunities() {
                     <td className="px-4 py-3">
                       <span className="flex items-center gap-1.5 text-sm font-semibold text-white">
                         <Users className="w-4 h-4 text-indigo-400" />
-                        {c.memberCount ?? 0}
+                        {c.memberCount}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-400">
-                      {c.creatorName ?? c.createdByName ?? '—'}
-                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-400">{c.createdByName}</td>
                     <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
                       {c.createdAt ? format(new Date(c.createdAt), 'MMM d, yyyy') : '—'}
                     </td>
                     <td className="px-4 py-3">
                       {c.centroidLatitude != null && c.centroidLongitude != null ? (
-                        <CentroidMapPopup
-                          lat={c.centroidLatitude}
-                          lng={c.centroidLongitude}
-                          name={c.name}
-                        />
+                        <CentroidMapPopup lat={c.centroidLatitude} lng={c.centroidLongitude} name={c.name} />
                       ) : (
-                        <span className="text-xs text-gray-600">—</span>
+                        <span className="text-xs text-gray-500">No location data</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       {c.inviteCode ? (
-                        <span className="flex items-center gap-1.5 text-xs font-mono font-bold text-indigo-300">
-                          <Key className="w-3 h-3" />
-                          {c.inviteCode}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span className="flex items-center gap-1.5 text-xs font-mono font-bold text-indigo-300">
+                            <Key className="w-3 h-3" />
+                            {c.inviteCode}
+                          </span>
+                          {c.inviteCodeExpiresAt && (
+                            <span className="text-[10px] text-gray-500">
+                              Expires {format(new Date(c.inviteCodeExpiresAt), 'MMM d, yyyy')}
+                            </span>
+                          )}
+                        </div>
                       ) : (
-                        <span className="text-xs text-gray-600">—</span>
+                        <div className="flex flex-col gap-1.5">
+                          <span className="text-xs text-amber-500">No active invite code</span>
+                          <button
+                            onClick={() => { setRegeneratingId(c.id); regenerateCode(c.id); }}
+                            disabled={regeneratingId === c.id}
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${regeneratingId === c.id ? 'animate-spin' : ''}`} />
+                            {regeneratingId === c.id ? 'Generating…' : 'Generate code'}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -173,7 +221,6 @@ export default function AdminCommunities() {
         )}
       </div>
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-gray-500">Page {page} of {totalPages}</p>

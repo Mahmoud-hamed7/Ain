@@ -22,6 +22,7 @@ import Skeleton from '../../components/Skeleton';
 import EmptyState from '../../components/EmptyState';
 import { createCustomIcon } from '../../utils/map';
 import { useNotificationStore } from '../../store/notificationStore';
+import CommunityMembersPanel from '../../components/Community/CommunityMembersPanel';
 import type { CommunityType, CommunitySystemListDto } from '../../types';
 
 // ─── Type config ──────────────────────────────────────────────────
@@ -115,17 +116,20 @@ function CommunityCard({
         </div>
       )}
 
-      {/* Centroid map toggle */}
-      {hasLocation && (
+      {/* Members + centroid */}
+      <button
+        onClick={onToggleMap}
+        className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+      >
+        <Users className="w-3.5 h-3.5" />
+        {expanded ? 'Hide Members' : 'Show Members'}
+      </button>
+      {expanded && (
         <>
-          <button
-            onClick={onToggleMap}
-            className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300 transition-colors"
-          >
-            <MapPin className="w-3.5 h-3.5" />
-            {expanded ? 'Hide Location' : 'Show Member Centroid'}
-          </button>
-          {expanded && <CentroidMap lat={community.centroidLatitude!} lng={community.centroidLongitude!} />}
+          {hasLocation && (
+            <CentroidMap lat={community.centroidLatitude!} lng={community.centroidLongitude!} />
+          )}
+          <CommunityMembersPanel communityId={community.id} />
         </>
       )}
     </div>

@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Clock, AlertTriangle, Search, Filter } from 'lucide-react';
+import { Clock, AlertTriangle, Search, Filter, Building2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import apiClient from '../../api/client';
 import Skeleton from '../../components/Skeleton';
 import EmptyState from '../../components/EmptyState';
 import { getStatusPinColor } from '../../utils/map';
+import { parseReportFeedResponse } from '../../utils/reports';
 
 const STATUSES = ['All', 'UnderReview', 'Dispatched', 'ReSolved', 'Rejected'];
 const SORTS = [
@@ -23,40 +24,37 @@ export default function AuthorityFeed() {
   const [sort,         setSort]         = useState('newest');
   const [specFilter,   setSpecFilter]   = useState('All');
 
-  /* Fetch authority profile to get specializations */
   const { data: profile } = useQuery({
     queryKey: ['authorities', 'me'],
     queryFn:  async () => (await apiClient.get('/api/authorities/me')).data,
   });
 
-  /* Main feed - جلب البيانات بناءً على الستيتس فقط لتجنب مشاكل الباك إند */
-  const { data, isLoading } = useQuery({
-    queryKey: ['reports', 'authority-feed', statusFilter], 
+  const { data: feed, isLoading } = useQuery({
+    queryKey: ['reports', 'authority-feed', statusFilter],
     queryFn: async () => {
       const res = await apiClient.get('/api/reports/authority-feed', {
         params: {
           status: statusFilter === 'All' ? undefined : statusFilter,
         },
       });
-      // استخراج التقارير من الخاصية reports
-      return res.data?.reports || [];
+      return parseReportFeedResponse(res.data);
     },
   });
 
-  /* Client-side filtering: Search + Dates + Specialization + Sort */
-  const processed: any[] = useMemo(() => {
-    let list: any[] = Array.isArray(data) ? [...data] : [];
+  const reports = feed?.reports ?? [];
+  const callerAuthorityName = feed?.callerAuthorityName ?? null;
 
-    // 1. فلترة البحث (Client-side Search)
+  const processed = useMemo(() => {
+    let list = [...reports];
+
     if (search) {
       const query = search.toLowerCase();
       list = list.filter((r) =>
         r.title?.toLowerCase().includes(query) ||
-        r.description?.toLowerCase().includes(query)
+        r.description?.toLowerCase().includes(query),
       );
     }
 
-    // 2. فلترة التواريخ (تفكيك التاريخ لتجنب مشاكل الـ Timezone)
     if (dateFrom) {
       const [year, month, day] = dateFrom.split('-').map(Number);
       const startDate = new Date(year, month - 1, day, 0, 0, 0, 0);
@@ -68,18 +66,13 @@ export default function AuthorityFeed() {
       list = list.filter((r) => new Date(r.createdAt).getTime() <= endDate.getTime());
     }
 
-    // 3. فلترة التخصص (استخدام includes بدلاً من === لمرونة البحث)
     if (specFilter !== 'All') {
       const spec = specFilter.toLowerCase().trim();
       list = list.filter((r) =>
-        r.categoryName?.toLowerCase().includes(spec) ||
-        r.category?.toLowerCase().includes(spec) ||
-        r.subCategoryName?.toLowerCase().includes(spec) ||
-        r.subCategory?.toLowerCase().includes(spec)
+        r.categoryLabel?.toLowerCase().includes(spec),
       );
     }
 
-    // 4. الترتيب (Sorting)
     switch (sort) {
       case 'oldest':
         list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -91,24 +84,33 @@ export default function AuthorityFeed() {
           return (bOver ? 1 : 0) - (aOver ? 1 : 0);
         });
         break;
-      default: // newest
+      default:
         list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
     return list;
-  // إضافة كل المتغيرات لمصفوفة الـ Dependencies عشان الـ useMemo تتحدث فوراً
-  }, [data, search, dateFrom, dateTo, sort, specFilter]);
+  }, [reports, search, dateFrom, dateTo, sort, specFilter]);
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-        <h1 className="text-2xl font-bold text-white">Case Feed / Workqueue</h1>
-        <span className="text-sm text-gray-500">{processed.length} case{processed.length !== 1 ? 's' : ''}</span>
+        <div className="space-y-2">
+          <h1 className="text-2xl font-bold text-white">Case Feed / Workqueue</h1>
+          {callerAuthorityName ? (
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-300 bg-blue-900/30 border border-blue-800/40 px-3 py-1 rounded-full">
+              <Building2 className="w-4 h-4" />
+              {callerAuthorityName}
+            </span>
+          ) : null}
+        </div>
+        <span className="text-sm text-gray-500">
+          {processed.length} case{processed.length !== 1 ? 's' : ''}
+          {feed?.totalCount != null && feed.totalCount !== processed.length
+            ? ` · ${feed.totalCount} total`
+            : ''}
+        </span>
       </div>
 
-      {/* Filters */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap gap-3 items-end">
-        {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
           <input
@@ -120,7 +122,6 @@ export default function AuthorityFeed() {
           />
         </div>
 
-        {/* Status */}
         <div className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-gray-500" />
           <select
@@ -136,7 +137,6 @@ export default function AuthorityFeed() {
           </select>
         </div>
 
-        {/* Specialization */}
         {profile?.specializations?.length > 0 && (
           <select
             value={specFilter}
@@ -150,7 +150,6 @@ export default function AuthorityFeed() {
           </select>
         )}
 
-        {/* Date range */}
         <div className="flex items-center gap-2">
           <input
             type="date"
@@ -167,7 +166,6 @@ export default function AuthorityFeed() {
           />
         </div>
 
-        {/* Sort */}
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value)}
@@ -176,7 +174,6 @@ export default function AuthorityFeed() {
           {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
 
-        {/* Clear */}
         {(search || statusFilter !== 'All' || dateFrom || dateTo || specFilter !== 'All') && (
           <button
             onClick={() => { setSearch(''); setStatusFilter('All'); setDateFrom(''); setDateTo(''); setSpecFilter('All'); }}
@@ -187,7 +184,6 @@ export default function AuthorityFeed() {
         )}
       </div>
 
-      {/* List */}
       {isLoading ? (
         <div className="flex flex-col gap-4">
           {[1, 2, 3, 4].map((n) => <Skeleton key={n} type="table-row" className="bg-gray-900 rounded-xl h-28" />)}
@@ -220,14 +216,13 @@ export default function AuthorityFeed() {
                       )}
                     </div>
                     <p className="text-gray-400 text-sm line-clamp-2 mb-3">{report.description}</p>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {report.category || report.categoryName
-                        ? <span className="px-2 py-1 bg-gray-800 text-gray-300 rounded-full border border-gray-700">{report.category || report.categoryName}</span>
-                        : null}
-                      {report.subCategory || report.subCategoryName
-                        ? <span className="px-2 py-1 bg-gray-800 text-gray-400 rounded-full border border-gray-700">{report.subCategory || report.subCategoryName}</span>
-                        : null}
-                    </div>
+                    {report.categoryLabel && (
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className="px-2 py-1 bg-gray-800 text-gray-300 rounded-full border border-gray-700">
+                          {report.categoryLabel}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex md:flex-col items-center md:items-end justify-between shrink-0 gap-2">

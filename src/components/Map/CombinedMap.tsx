@@ -104,7 +104,7 @@ export default function CombinedMap({
       ? [profile.latitude, profile.longitude]
       : CAIRO;
 
-  const viewBase = viewerRole === 'admin' ? '/admin/report' : '/authority/report';
+  const viewBase = viewerRole === 'admin' ? '/admin/reports' : '/authority/report';
 
   const isLoading = rLoading || sLoading;
 

@@ -15,6 +15,7 @@ import {
   Globe2, Key, RefreshCw, Trash2, Copy, CheckCheck,
   AlertTriangle, Navigation, Clock,
 } from 'lucide-react';
+import { communityApi, patchCommunityInviteCodeInCache, resolveCommunityInviteCode, resolveCommunityInviteCodeExpiresAt, forgetCommunityInviteCode } from '../../api/community';
 import apiClient from '../../api/client';
 import Skeleton from '../../components/Skeleton';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -86,7 +87,10 @@ function MyCommunityCard({
   onRevoke: (id: string) => void;
 }) {
   const isCreator = community.createdById === userId;
-  const inviteCode: string | null = community.inviteCode ?? null;
+  const inviteCode: string | null =
+    resolveCommunityInviteCode(community.id, community.inviteCode ?? null);
+  const inviteCodeExpiresAt =
+    resolveCommunityInviteCodeExpiresAt(community.id, community.inviteCodeExpiresAt ?? null);
   const memberStatus: MemberStatus = community.userMemberStatus ?? 'Active';
 
   return (
@@ -145,6 +149,11 @@ function MyCommunityCard({
           {inviteCode ? (
             <div className="flex items-center justify-between gap-2">
               <CopyCode code={inviteCode} />
+              {inviteCodeExpiresAt && (
+                <span className="text-[10px] text-gray-500">
+                  Expires {new Date(inviteCodeExpiresAt).toLocaleDateString()}
+                </span>
+              )}
               <div className="flex gap-1">
                 <button
                   onClick={() => onRegenerate(community.id)}
@@ -307,14 +316,30 @@ export default function Communities() {
   });
 
   const { mutate: regenerateCode } = useMutation({
-    mutationFn: (id: string) => apiClient.post(`/api/community/${id}/regenerate-code`).then((r) => r.data),
-    onSuccess: () => { addToast({ type: 'success', title: 'New invite code generated' }); refetch(); },
+    mutationFn: (id: string) => communityApi.regenerateInviteCode(id),
+    onSuccess: (result, id) => {
+      patchCommunityInviteCodeInCache(
+        qc,
+        result.communityId || id,
+        result.inviteCode,
+        result.inviteCodeExpiresAt,
+      );
+      addToast({
+        type: 'success',
+        title: 'New invite code generated',
+        description: result.inviteCode ? `Code: ${result.inviteCode}` : undefined,
+      });
+    },
     onError: () => addToast({ type: 'error', title: 'Failed to regenerate code' }),
   });
 
   const { mutate: revokeCode } = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/api/community/${id}/invite-code`),
-    onSuccess: () => { addToast({ type: 'info', title: 'Invite code revoked' }); refetch(); },
+    onSuccess: (_d, id) => {
+      forgetCommunityInviteCode(id);
+      addToast({ type: 'info', title: 'Invite code revoked' });
+      refetch();
+    },
     onError: () => addToast({ type: 'error', title: 'Failed to revoke code' }),
   });
 
